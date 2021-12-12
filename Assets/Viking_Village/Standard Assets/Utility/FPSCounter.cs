@@ -34,5 +34,10 @@ namespace UnityStandardAssets.Utility
                 m_GuiText.text = string.Format(display, m_CurrentFps);
             }
         }
+
+        public double GetFrameTime()
+        {
+            return 1.0 / m_CurrentFps;
+        }
     }
 }

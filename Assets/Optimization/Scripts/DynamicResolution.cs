@@ -8,13 +8,14 @@
 
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityStandardAssets.Utility;
 
 public class DynamicResolution : MonoBehaviour
 {
     static double DesiredFrameRate = 60.0;
     static double DesiredFrameTime = 1000.0 / DesiredFrameRate;
 
-
+    public FPSCounter fps = null;
     // BEGIN TWEAKABLES BLOCK
     const uint ScaleRaiseCounterLimit = 360;
 
@@ -48,6 +49,9 @@ public class DynamicResolution : MonoBehaviour
 
     double GPUFrameTime = 0.0;
     double CPUFrameTime = 0.0;
+
+    double TotalFrameTime = 0.0;
+    bool UseFrameTimeScale = false;
 
     double GPUTimeDelta = 0.0;
 
@@ -98,30 +102,16 @@ public class DynamicResolution : MonoBehaviour
             {
                 GetFrameStats();
 
-                double headroom = DesiredFrameTime - GPUFrameTime;
-
-                // If headroom is negative, we've exceeded target and need to scale down.
-                if (headroom < 0.0)
+                if (UseFrameTimeScale)
                 {
-                    ScaleRaiseCounter = 0;
-
-                    // Since headroom is guaranteed to be negative here, we can add rather than negate and subtract.
-                    float scaleDecreaseFactor = (float)(headroom / DesiredFrameTime);
-                    CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor + scaleDecreaseFactor);
-
-#if !PIPELINE_IMPLEMENTS_DRH
-                    SetNewScale();
-#endif
-                }
-                else
-                {
-                    // If delta is greater than headroom, we expect to exceed target and need to scale down.
-                    if (GPUTimeDelta > headroom)
+                    double headroom = DesiredFrameTime - TotalFrameTime;
+                    if (headroom < 0.0)
                     {
                         ScaleRaiseCounter = 0;
 
-                        float scaleDecreaseFactor = (float)(GPUTimeDelta / DesiredFrameTime);
-                        CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor - scaleDecreaseFactor);
+                        // Since headroom is guaranteed to be negative here, we can add rather than negate and subtract.
+                        float scaleDecreaseFactor = (float)(headroom / DesiredFrameTime);
+                        CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor + scaleDecreaseFactor);
 
 #if !PIPELINE_IMPLEMENTS_DRH
                         SetNewScale();
@@ -129,41 +119,125 @@ public class DynamicResolution : MonoBehaviour
                     }
                     else
                     {
-                        // If delta is negative, then perf is moving in a good direction and we can increment to scale up faster.
-                        if (GPUTimeDelta < 0.0)
-                        {
-                            ScaleRaiseCounter += ScaleRaiseCounterBigIncrement;
-                        }
-                        else
-                        {
-                            double headroomThreshold = DesiredFrameTime * HeadroomThreshold;
-                            double deltaThreshold = DesiredFrameTime * DeltaThreshold;
-
-                            // If we're too close to target or the delta is too large, do nothing out of concern that we could scale up and exceed target.
-                            // Otherwise, slow increment towards a scale up.
-                            if ((headroom > headroomThreshold) && (GPUTimeDelta < deltaThreshold))
-                            {
-                                ScaleRaiseCounter += ScaleRaiseCounterSmallIncrement;
-                            }
-                        }
-
-                        if (ScaleRaiseCounter >= ScaleRaiseCounterLimit)
+                        // If delta is greater than headroom, we expect to exceed target and need to scale down.
+                        if (TotalFrameTime > headroom)
                         {
                             ScaleRaiseCounter = 0;
 
-                            // Headroom as percent of target is unlikely to use the full 0-1 range, so clamp on user settings and then remap to 0-1.
-                            float headroomPercent = (float)(headroom / DesiredFrameTime);
-                            float clampedHeadroom = Mathf.Clamp(headroomPercent, ScaleHeadroomClampMin, ScaleHeadroomClampMax);
-                            float remappedHeadroom = (clampedHeadroom - ScaleHeadroomClampMin) / (ScaleHeadroomClampMax - ScaleHeadroomClampMin);
-                            float scaleIncreaseFactor = ScaleIncreaseBasis * Mathf.Lerp(ScaleIncreaseSmallFactor, ScaleIncreaseBigFactor, remappedHeadroom);
-                            CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor + scaleIncreaseFactor);
+                            float scaleDecreaseFactor = (float)(TotalFrameTime / DesiredFrameTime);
+                            CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor - scaleDecreaseFactor);
 
 #if !PIPELINE_IMPLEMENTS_DRH
                             SetNewScale();
 #endif
                         }
+                        else
+                        {
+                            // If delta is negative, then perf is moving in a good direction and we can increment to scale up faster.
+                            if (TotalFrameTime < 0.0)
+                            {
+                                ScaleRaiseCounter += ScaleRaiseCounterBigIncrement;
+                            }
+                            else
+                            {
+                                double headroomThreshold = DesiredFrameTime * HeadroomThreshold;
+                                double deltaThreshold = DesiredFrameTime * DeltaThreshold;
+
+                                // If we're too close to target or the delta is too large, do nothing out of concern that we could scale up and exceed target.
+                                // Otherwise, slow increment towards a scale up.
+                                if ((headroom > headroomThreshold) && (TotalFrameTime < deltaThreshold))
+                                {
+                                    ScaleRaiseCounter += ScaleRaiseCounterSmallIncrement;
+                                }
+                            }
+
+                            if (ScaleRaiseCounter >= ScaleRaiseCounterLimit)
+                            {
+                                ScaleRaiseCounter = 0;
+
+                                // Headroom as percent of target is unlikely to use the full 0-1 range, so clamp on user settings and then remap to 0-1.
+                                float headroomPercent = (float)(headroom / DesiredFrameTime);
+                                float clampedHeadroom = Mathf.Clamp(headroomPercent, ScaleHeadroomClampMin, ScaleHeadroomClampMax);
+                                float remappedHeadroom = (clampedHeadroom - ScaleHeadroomClampMin) / (ScaleHeadroomClampMax - ScaleHeadroomClampMin);
+                                float scaleIncreaseFactor = ScaleIncreaseBasis * Mathf.Lerp(ScaleIncreaseSmallFactor, ScaleIncreaseBigFactor, remappedHeadroom);
+                                CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor + scaleIncreaseFactor);
+
+#if !PIPELINE_IMPLEMENTS_DRH
+                                SetNewScale();
+#endif
+                            }
+                        }
                     }
                 }
+                else
+                {
+                    double headroom = DesiredFrameTime - GPUFrameTime;
+
+                    // If headroom is negative, we've exceeded target and need to scale down.
+                    if (headroom < 0.0)
+                    {
+                        ScaleRaiseCounter = 0;
+
+                        // Since headroom is guaranteed to be negative here, we can add rather than negate and subtract.
+                        float scaleDecreaseFactor = (float)(headroom / DesiredFrameTime);
+                        CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor + scaleDecreaseFactor);
+
+#if !PIPELINE_IMPLEMENTS_DRH
+                        SetNewScale();
+#endif
+                    }
+                    else
+                    {
+                        // If delta is greater than headroom, we expect to exceed target and need to scale down.
+                        if (GPUTimeDelta > headroom)
+                        {
+                            ScaleRaiseCounter = 0;
+
+                            float scaleDecreaseFactor = (float)(GPUTimeDelta / DesiredFrameTime);
+                            CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor - scaleDecreaseFactor);
+
+#if !PIPELINE_IMPLEMENTS_DRH
+                            SetNewScale();
+#endif
+                        }
+                        else
+                        {
+                            // If delta is negative, then perf is moving in a good direction and we can increment to scale up faster.
+                            if (GPUTimeDelta < 0.0)
+                            {
+                                ScaleRaiseCounter += ScaleRaiseCounterBigIncrement;
+                            }
+                            else
+                            {
+                                double headroomThreshold = DesiredFrameTime * HeadroomThreshold;
+                                double deltaThreshold = DesiredFrameTime * DeltaThreshold;
+
+                                // If we're too close to target or the delta is too large, do nothing out of concern that we could scale up and exceed target.
+                                // Otherwise, slow increment towards a scale up.
+                                if ((headroom > headroomThreshold) && (GPUTimeDelta < deltaThreshold))
+                                {
+                                    ScaleRaiseCounter += ScaleRaiseCounterSmallIncrement;
+                                }
+                            }
+
+                            if (ScaleRaiseCounter >= ScaleRaiseCounterLimit)
+                            {
+                                ScaleRaiseCounter = 0;
+
+                                // Headroom as percent of target is unlikely to use the full 0-1 range, so clamp on user settings and then remap to 0-1.
+                                float headroomPercent = (float)(headroom / DesiredFrameTime);
+                                float clampedHeadroom = Mathf.Clamp(headroomPercent, ScaleHeadroomClampMin, ScaleHeadroomClampMax);
+                                float remappedHeadroom = (clampedHeadroom - ScaleHeadroomClampMin) / (ScaleHeadroomClampMax - ScaleHeadroomClampMin);
+                                float scaleIncreaseFactor = ScaleIncreaseBasis * Mathf.Lerp(ScaleIncreaseSmallFactor, ScaleIncreaseBigFactor, remappedHeadroom);
+                                CurrentScaleFactor = Mathf.Clamp01(CurrentScaleFactor + scaleIncreaseFactor);
+
+#if !PIPELINE_IMPLEMENTS_DRH
+                                SetNewScale();
+#endif
+                            }
+                        }
+                    }
+                } 
             }
         }
 #if ENABLE_DYNAMIC_RESOLUTION_DEBUG
@@ -232,6 +306,17 @@ public class DynamicResolution : MonoBehaviour
 
         GPUFrameTime = FrameTimings[0].gpuFrameTime;
         CPUFrameTime = FrameTimings[0].cpuFrameTime;
+
+        if (GPUFrameTime == 0 && CPUFrameTime == 0)
+        {
+            UseFrameTimeScale = true;
+            TotalFrameTime = fps.GetFrameTime();
+        }
+        else
+        {
+            UseFrameTimeScale = false;
+            TotalFrameTime = 0.0;
+        }
     }
 
     static public void Enable()
@@ -276,7 +361,7 @@ public class DynamicResolution : MonoBehaviour
     }
 
     private void Start()
-    {
+    { 
         // Metal on iOS will fail the timer frequency check, but we know it works so skip the check in that case.
 #if UNITY_IOS
         if (SystemInfo.graphicsDeviceType != GraphicsDeviceType.Metal)
@@ -325,8 +410,25 @@ public class DynamicResolution : MonoBehaviour
         DebugStyle = GUI.skin.box;
         DebugStyle.fontSize = 20;
         DebugStyle.alignment = TextAnchor.MiddleLeft;
-
-        GUILayout.Label(
+        if (UseFrameTimeScale)
+        {
+            GUILayout.Label(
+            string.Format(
+                "Enabled: {0}\nResolution: {1} x {2}\nScaleFactor: {3:F3}\nFrameTime: {4:F3}",
+                SystemEnabled,
+                rezWidth,
+                rezHeight,
+#if PIPELINE_IMPLEMENTS_DRH
+                curScale,
+#else
+                Mathf.Lerp(MinScaleFactor, MaxScaleFactor, CurrentScaleFactor),
+#endif
+                TotalFrameTime),
+            DebugStyle);
+        }
+        else
+        {
+            GUILayout.Label(
             string.Format(
                 "Enabled: {0}\nResolution: {1} x {2}\nScaleFactor: {3:F3}\nGPU: {4:F3} CPU: {5:F3}",
                 SystemEnabled,
@@ -340,6 +442,8 @@ public class DynamicResolution : MonoBehaviour
                 GPUFrameTime,
                 CPUFrameTime),
             DebugStyle);
+        }
+        
     }
 #endif
 }
